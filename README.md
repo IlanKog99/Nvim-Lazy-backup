@@ -222,4 +222,3 @@ After installation, your Neovim configuration will be at:
 If you find this project helpful, please give it a star ⭐!
 
 For issues and questions, please open an issue on GitHub.
-

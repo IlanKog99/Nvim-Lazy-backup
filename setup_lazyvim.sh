@@ -5,8 +5,16 @@
 #
 # PREREQUISITES (must be installed before running this script):
 #   - git (for cloning repositories and plugin management)
-#   - curl (for downloading dependencies)
+#   - curl (for downloading LazyVim bootstrap script)
 #   - sudo access (for installing system packages)
+#
+# IMPORTANT FOR ARCH LINUX USERS:
+#   - This script does NOT perform a full system upgrade (pacman -Syu) to avoid
+#     potential system bricking if interrupted or if disk space is insufficient.
+#   - You should update your Arch system manually BEFORE running this script:
+#     sudo pacman -Syu
+#   - The script will check for sufficient disk space (2GB minimum) before
+#     installing packages on Arch Linux.
 #
 # All other dependencies (neovim) will be automatically installed by this script.
 
@@ -41,6 +49,37 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
+# Function to check available disk space
+check_disk_space() {
+    local required_gb=${1:-2}  # Default to 2GB if not specified
+    local available_kb
+    
+    # Get available space in KB (works on Linux)
+    # Use -k flag to force 1KB blocks, avoiding POSIXLY_CORRECT 512-byte block issue
+    if command_exists df; then
+        available_kb=$(df -k / | tail -1 | awk '{print $4}')
+        if [ -z "$available_kb" ]; then
+            print_warning "Could not determine available disk space, skipping check"
+            return 0
+        fi
+        
+        # Convert KB to GB (approximately)
+        local available_gb=$((available_kb / 1024 / 1024))
+        
+        if [ "$available_gb" -lt "$required_gb" ]; then
+            print_error "Insufficient disk space: ${available_gb}GB available, ${required_gb}GB required"
+            print_error "Please free up disk space before continuing"
+            return 1
+        else
+            print_status "Disk space check passed: ${available_gb}GB available"
+            return 0
+        fi
+    else
+        print_warning "df command not found, skipping disk space check"
+        return 0
+    fi
+}
+
 # Function to install packages based on distro
 install_packages() {
     print_status "Detecting package manager and installing dependencies..."
@@ -62,8 +101,20 @@ install_packages() {
         sudo dnf install -y neovim
     elif command_exists pacman; then
         # Arch Linux
+        # NOTE: We use -S (not -Syu) to avoid full system upgrade which can brick
+        # the system if interrupted or if disk space is insufficient. Users should
+        # update their system manually with 'sudo pacman -Syu' before running this script.
         print_status "Using pacman package manager (Arch Linux)"
-        sudo pacman -Syu --noconfirm neovim
+        print_warning "For Arch Linux, ensure your system is up to date before running this script"
+        print_warning "Run 'sudo pacman -Syu' manually if needed"
+        
+        # Check disk space before installing (critical for Arch)
+        if ! check_disk_space 2; then
+            print_error "Disk space check failed. Aborting package installation."
+            exit 1
+        fi
+        
+        sudo pacman -S --needed --noconfirm neovim
     elif command_exists zypper; then
         # openSUSE
         print_status "Using zypper package manager (openSUSE)"
@@ -82,49 +133,46 @@ install_lazyvim() {
     # Check if LazyVim is already installed
     if [ -d "$HOME/.config/nvim" ] && [ -f "$HOME/.config/nvim/init.lua" ]; then
         print_warning "LazyVim configuration already exists at ~/.config/nvim"
-        print_warning "Backing up existing configuration to ~/.config/nvim.backup"
-        if [ -d "$HOME/.config/nvim.backup" ]; then
-            rm -rf "$HOME/.config/nvim.backup"
-        fi
-        mv "$HOME/.config/nvim" "$HOME/.config/nvim.backup"
+        print_warning "The installation script will handle this. Continuing..."
     fi
     
     # Install LazyVim using the official bootstrap script
-    print_status "Running LazyVim bootstrap script..."
-    bash <(curl -s https://raw.githubusercontent.com/LazyVim/LazyVim/main/scripts/install.sh)
+    bash <(curl -s https://raw.githubusercontent.com/LazyVim/LazyVim/starter/scripts/install.sh)
     
     print_success "LazyVim installed successfully"
-}
-
-# Function to copy keymaps configuration
-copy_keymaps() {
-    print_status "Setting up custom keymaps configuration..."
-    
-    # Check if keymaps.lua exists in current directory
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-    KEYMAPS_FILE="$SCRIPT_DIR/lua/config/keymaps.lua"
-    
-    if [ -f "$KEYMAPS_FILE" ]; then
-        # Ensure the target directory exists (should already exist from LazyVim install)
-        mkdir -p "$HOME/.config/nvim/lua/config"
-        cp "$KEYMAPS_FILE" "$HOME/.config/nvim/lua/config/keymaps.lua"
-        print_success "Custom keymaps copied from current directory"
-    else
-        print_error "No lua/config/keymaps.lua found in current directory!"
-        print_error "Please ensure keymaps.lua is in the lua/config/ directory relative to this script."
-        exit 1
-    fi
 }
 
 # Function to create necessary directories
 create_directories() {
     print_status "Creating necessary directories..."
     
+    mkdir -p "$HOME/.config/nvim/lua/config"
     mkdir -p "$HOME/.cache"
     mkdir -p "$HOME/.local/share"
-    mkdir -p "$HOME/.config"
     
     print_success "Directories created successfully"
+}
+
+# Function to copy keymaps configuration
+copy_keymaps() {
+    print_status "Setting up custom keymaps configuration..."
+    
+    # Get the directory where this script is located
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    KEYMAPS_FILE="$SCRIPT_DIR/lua/config/keymaps.lua"
+    
+    # Check if keymaps.lua exists relative to script location
+    if [ -f "$KEYMAPS_FILE" ]; then
+        cp "$KEYMAPS_FILE" "$HOME/.config/nvim/lua/config/keymaps.lua"
+        print_success "keymaps.lua copied from script directory"
+    else
+        print_error "No lua/config/keymaps.lua found in script directory!"
+        print_error "Please ensure lua/config/keymaps.lua is in the same directory as this script."
+        print_error "Script directory: $SCRIPT_DIR"
+        print_error "Expected file: $KEYMAPS_FILE"
+        print_error "You can download it from: https://github.com/IlanKog99/Lazy-Nvim-backup"
+        exit 1
+    fi
 }
 
 # Main installation function
@@ -154,20 +202,9 @@ main() {
         exit 1
     fi
     
-    # Check if Neovim is already installed
-    if command_exists nvim; then
-        print_warning "Neovim is already installed"
-        read -p "Do you want to reinstall Neovim? (y/N): " -n 1 -r
-        echo
-        if [[ $REPLY =~ ^[Yy]$ ]]; then
-            install_packages
-        fi
-    else
-        install_packages
-    fi
-    
     # Start installation
     create_directories
+    install_packages
     install_lazyvim
     copy_keymaps
     
@@ -177,16 +214,28 @@ main() {
     echo -e "${GREEN}========================================${NC}"
     echo ""
     echo -e "${YELLOW}Next steps:${NC}"
-    echo "1. Open Neovim with: nvim"
-    echo "2. LazyVim will automatically install plugins on first launch"
+    echo "1. Open Neovim: nvim"
+    echo "2. LazyVim will automatically install all plugins on first launch"
+    echo "3. Your custom keymaps are now configured"
     echo ""
     echo -e "${BLUE}Your LazyVim setup includes:${NC}"
-    echo "• LazyVim distribution with all default plugins"
-    echo "• Custom keybindings:"
-    echo "  - Ctrl+E: Move to end of line"
-    echo "  - Ctrl+A: Move to start of line"
-    echo "  - Ctrl+Z: Undo"
-    echo "  - Ctrl+Arrow: Navigate words"
+    echo "• LazyVim distribution with sensible defaults"
+    echo "• Lazy.nvim plugin manager"
+    echo "• Telescope fuzzy finder"
+    echo "• Treesitter syntax highlighting"
+    echo "• LSP support with Mason"
+    echo "• Custom keybindings (Ctrl+E/A/Z, Ctrl+Arrow keys)"
+    echo "• Which-key keybinding helper"
+    echo ""
+    echo -e "${YELLOW}Custom Keybindings:${NC}"
+    echo "• Ctrl+E - Move to end of line"
+    echo "• Ctrl+A - Move to start of line"
+    echo "• Ctrl+Z - Undo"
+    echo "• Ctrl+Right/Left Arrow - Navigate words"
+    echo ""
+    echo -e "${YELLOW}Cleanup (optional):${NC}"
+    echo "You can now delete the downloaded files:"
+    echo "  rm -rf Lazy-Nvim-backup/"
     echo ""
     echo -e "${GREEN}Enjoy your new LazyVim setup!${NC}"
 }
