@@ -20,6 +20,9 @@
 
 set -e  # Exit on any error
 
+# Get the directory where this script is located
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -157,8 +160,6 @@ create_directories() {
 copy_keymaps() {
     print_status "Setting up custom keymaps configuration..."
     
-    # Get the directory where this script is located
-    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     KEYMAPS_FILE="$SCRIPT_DIR/lua/config/keymaps.lua"
     
     # Check if keymaps.lua exists relative to script location
@@ -170,7 +171,7 @@ copy_keymaps() {
         print_error "Please ensure lua/config/keymaps.lua is in the same directory as this script."
         print_error "Script directory: $SCRIPT_DIR"
         print_error "Expected file: $KEYMAPS_FILE"
-        print_error "You can download it from: https://github.com/IlanKog99/Lazy-Nvim-backup"
+        print_error "You can download it from: https://github.com/IlanKog99/Nvim-Lazy-backup"
         exit 1
     fi
 }
@@ -235,7 +236,7 @@ main() {
     echo ""
     echo -e "${YELLOW}Cleanup (optional):${NC}"
     echo "You can now delete the downloaded files:"
-    echo "  rm -rf Lazy-Nvim-backup/"
+    echo "  rm -rf Nvim-Lazy-backup/"
     echo ""
     echo -e "${GREEN}Enjoy your new LazyVim setup!${NC}"
 }

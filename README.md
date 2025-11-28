@@ -67,14 +67,14 @@ sudo zypper install -y git curl
 
 #### One-liner Installation
 ```bash
-git clone https://github.com/IlanKog99/Lazy-Nvim-backup.git && cd Lazy-Nvim-backup && chmod +x setup_lazyvim.sh && ./setup_lazyvim.sh && cd .. && rm -rf Lazy-Nvim-backup
+git clone https://github.com/IlanKog99/Nvim-Lazy-backup.git && cd Nvim-Lazy-backup && chmod +x setup_lazyvim.sh && ./setup_lazyvim.sh && cd .. && rm -rf Nvim-Lazy-backup
 ```
 
 #### Step-by-step Installation
 1. Clone and enter the repository:
 ```bash
-git clone https://github.com/IlanKog99/Lazy-Nvim-backup.git
-cd Lazy-Nvim-backup
+git clone https://github.com/IlanKog99/Nvim-Lazy-backup.git
+cd Nvim-Lazy-backup
 ```
 
 2. Run the setup script:
@@ -86,7 +86,7 @@ chmod +x setup_lazyvim.sh
 3. Clean up (optional):
 ```bash
 cd ..
-rm -rf Lazy-Nvim-backup
+rm -rf Nvim-Lazy-backup
 ```
 
 4. Open Neovim:
@@ -160,7 +160,7 @@ require("lazy").setup({
 ## 📁 Project Structure
 
 ```
-Lazy-Nvim-backup/
+Nvim-Lazy-backup/
 ├── README.md              # This file
 ├── setup_lazyvim.sh       # Automated installation script
 └── lua/
