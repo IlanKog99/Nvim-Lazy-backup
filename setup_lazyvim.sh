@@ -234,14 +234,28 @@ install_neovim_binary() {
     # Set up cleanup trap to ensure temp directory is removed on exit
     trap "rm -rf '$temp_dir'" EXIT
     
-    # Download latest stable binary tarball
-    print_status "Downloading latest Neovim binary from GitHub..."
-    local download_url="https://github.com/neovim/neovim/releases/latest/download/nvim-linux64.tar.gz"
+    # Get latest release tag from GitHub API
+    print_status "Getting latest Neovim release version from GitHub..."
+    local latest_tag
+    latest_tag=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
+    
+    if [ -z "$latest_tag" ]; then
+        print_warning "Failed to get latest release tag from GitHub API, trying direct download..."
+        # Fallback: try the /latest/download/ pattern
+        local download_url="https://github.com/neovim/neovim/releases/latest/download/nvim-linux64.tar.gz"
+    else
+        print_status "Latest release: $latest_tag"
+        # Construct download URL with version tag
+        local download_url="https://github.com/neovim/neovim/releases/download/${latest_tag}/nvim-linux64.tar.gz"
+    fi
+    
     local tarball_path="$temp_dir/nvim-linux64.tar.gz"
     
     # Download with progress and error checking
+    print_status "Downloading Neovim binary from: $download_url"
     if ! curl -L -f -o "$tarball_path" "$download_url" 2>&1; then
         print_error "Failed to download Neovim binary tarball"
+        print_error "URL attempted: $download_url"
         print_error "Please check your internet connection and try again"
         # Check if file exists and show first few lines (might be an error page)
         if [ -f "$tarball_path" ]; then
@@ -250,6 +264,7 @@ install_neovim_binary() {
             echo ""
         fi
         rm -rf "$temp_dir"
+        trap - EXIT
         return 1
     fi
     
