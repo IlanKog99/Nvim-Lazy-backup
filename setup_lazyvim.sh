@@ -83,18 +83,43 @@ check_disk_space() {
     fi
 }
 
+# Function to check if Neovim command exists (handles both regular commands and AppImages)
+nvim_command_exists() {
+    local nvim_cmd="${1:-nvim}"
+    
+    # Check if it's a command in PATH
+    if command_exists "$nvim_cmd"; then
+        return 0
+    fi
+    
+    # Check if it's an absolute path to an executable file
+    if [ -f "$nvim_cmd" ] && [ -x "$nvim_cmd" ]; then
+        return 0
+    fi
+    
+    return 1
+}
+
 # Function to check Neovim version
 check_neovim_version() {
     local min_version="0.11.2"
     local nvim_cmd="${1:-nvim}"
     
-    if ! command_exists "$nvim_cmd"; then
+    if ! nvim_command_exists "$nvim_cmd"; then
         return 1
     fi
     
     # Get version string (first line of nvim --version)
+    # Use absolute path if it's a file, otherwise use as-is
+    # Capture both stdout and stderr, as some versions output to stderr
     local version_line
-    version_line=$("$nvim_cmd" --version 2>/dev/null | head -n 1)
+    if [ -f "$nvim_cmd" ] && [ -x "$nvim_cmd" ]; then
+        # It's a file path, run it directly
+        version_line=$("$nvim_cmd" --version 2>&1 | head -n 1)
+    else
+        # It's a command in PATH
+        version_line=$("$nvim_cmd" --version 2>&1 | head -n 1)
+    fi
     
     if [ -z "$version_line" ]; then
         return 1
@@ -144,13 +169,21 @@ check_neovim_version() {
 get_neovim_version() {
     local nvim_cmd="${1:-nvim}"
     
-    if ! command_exists "$nvim_cmd"; then
+    if ! nvim_command_exists "$nvim_cmd"; then
         echo "not installed"
         return
     fi
     
     local version_line
-    version_line=$("$nvim_cmd" --version 2>/dev/null | head -n 1)
+    # Use absolute path if it's a file, otherwise use as-is
+    # Capture both stdout and stderr, as some versions output to stderr
+    if [ -f "$nvim_cmd" ] && [ -x "$nvim_cmd" ]; then
+        # It's a file path, run it directly
+        version_line=$("$nvim_cmd" --version 2>&1 | head -n 1)
+    else
+        # It's a command in PATH
+        version_line=$("$nvim_cmd" --version 2>&1 | head -n 1)
+    fi
     
     if [ -z "$version_line" ]; then
         echo "unknown"
@@ -226,9 +259,37 @@ install_neovim_appimage() {
     if [ -f "$nvim_path" ] && [ -x "$nvim_path" ]; then
         print_success "Neovim AppImage installed successfully at $nvim_path"
         
+        # Test if AppImage actually runs (some systems need FUSE)
+        print_status "Testing Neovim AppImage..."
+        if ! "$nvim_path" --version >/dev/null 2>&1; then
+            print_warning "AppImage may require FUSE. Checking for fuse..."
+            if ! command_exists fusermount && ! command_exists fusermount3; then
+                print_warning "FUSE not found. AppImage may not work. Trying to extract AppImage..."
+                # Try to extract AppImage as fallback
+                local extract_dir="$install_dir/nvim-extracted"
+                mkdir -p "$extract_dir"
+                cd "$extract_dir"
+                "$nvim_path" --appimage-extract >/dev/null 2>&1
+                if [ -f "$extract_dir/squashfs-root/AppRun" ]; then
+                    mv "$nvim_path" "${nvim_path}.backup"
+                    ln -sf "$extract_dir/squashfs-root/AppRun" "$nvim_path"
+                    print_status "Extracted AppImage to $extract_dir"
+                else
+                    print_error "Failed to extract AppImage. FUSE may be required."
+                    return 1
+                fi
+                cd - >/dev/null
+            fi
+        fi
+        
         # Test version
         local installed_version
         installed_version=$(get_neovim_version "$nvim_path")
+        if [ "$installed_version" = "unknown" ]; then
+            print_error "Failed to get Neovim version from AppImage"
+            print_error "The AppImage may not be working correctly"
+            return 1
+        fi
         print_status "Installed Neovim version: $installed_version"
         
         return 0
@@ -248,6 +309,13 @@ install_packages() {
         print_status "Using apt package manager (Debian/Ubuntu)"
         print_status "Setting up Neovim PPA for latest stable version..."
         
+        # Remove old neovim first to avoid conflicts
+        if command_exists nvim || dpkg -l 2>/dev/null | grep -q "^ii.*neovim"; then
+            print_status "Removing old Neovim installation to avoid conflicts..."
+            sudo apt remove -y neovim 2>/dev/null || true
+            sudo apt purge -y neovim 2>/dev/null || true
+        fi
+        
         # Check if add-apt-repository exists
         if ! command_exists add-apt-repository; then
             print_status "Installing software-properties-common for add-apt-repository..."
@@ -264,22 +332,35 @@ install_packages() {
                 echo "deb https://ppa.launchpadcontent.net/neovim-ppa/stable/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/neovim-ppa-stable.list >/dev/null
                 sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 9DBB0BE9366964F134855E2255F96FCF8231B6DD 2>/dev/null || true
             else
-                print_warning "lsb_release not available, will check version after installation and use AppImage if needed"
+                print_warning "lsb_release not available, using AppImage instead"
+                install_neovim_appimage
+                return 0
             fi
         fi
         
         sudo apt update
-        sudo apt install -y neovim
         
-        # Verify version
-        if check_neovim_version nvim; then
-            local installed_version
-            installed_version=$(get_neovim_version nvim)
-            print_success "Neovim installed successfully (version $installed_version)"
-        else
-            print_warning "Installed Neovim version may be insufficient, falling back to AppImage..."
-            install_neovim_appimage
+        # Try to install from PPA (PPA should have higher priority)
+        if sudo apt install -y neovim 2>/dev/null; then
+            # Verify version - check multiple possible locations
+            local nvim_to_check=""
+            if [ -f "/usr/bin/nvim" ] && [ -x "/usr/bin/nvim" ]; then
+                nvim_to_check="/usr/bin/nvim"
+            elif command_exists nvim; then
+                nvim_to_check="nvim"
+            fi
+            
+            if [ -n "$nvim_to_check" ] && check_neovim_version "$nvim_to_check"; then
+                local installed_version
+                installed_version=$(get_neovim_version "$nvim_to_check")
+                print_success "Neovim installed successfully from PPA (version $installed_version)"
+                return 0
+            fi
         fi
+        
+        # If PPA installation failed or version is insufficient, use AppImage
+        print_warning "PPA installation failed or version is insufficient, falling back to AppImage..."
+        install_neovim_appimage
         
     elif command_exists yum; then
         # RHEL/CentOS/Fedora
@@ -475,19 +556,43 @@ main() {
     
     # Verify Neovim version after installation
     print_status "Verifying Neovim installation..."
-    local nvim_cmd="nvim"
+    local nvim_cmd=""
     
-    # Check if nvim is in PATH (might be in ~/.local/bin)
-    if [ "$EUID" -ne 0 ] && [ -f "$HOME/.local/bin/nvim" ]; then
-        nvim_cmd="$HOME/.local/bin/nvim"
-        # Ensure it's in PATH for verification
-        export PATH="$HOME/.local/bin:$PATH"
+    # Find Neovim installation - check multiple possible locations
+    if [ "$EUID" -eq 0 ]; then
+        # Root: check /usr/local/bin first (AppImage location), then /usr/bin
+        if [ -f "/usr/local/bin/nvim" ] && [ -x "/usr/local/bin/nvim" ]; then
+            nvim_cmd="/usr/local/bin/nvim"
+        elif [ -f "/usr/bin/nvim" ] && [ -x "/usr/bin/nvim" ]; then
+            nvim_cmd="/usr/bin/nvim"
+        elif command_exists nvim; then
+            nvim_cmd="nvim"
+        fi
+    else
+        # Non-root: check ~/.local/bin first (AppImage location), then system locations
+        if [ -f "$HOME/.local/bin/nvim" ] && [ -x "$HOME/.local/bin/nvim" ]; then
+            nvim_cmd="$HOME/.local/bin/nvim"
+            export PATH="$HOME/.local/bin:$PATH"
+        elif [ -f "/usr/local/bin/nvim" ] && [ -x "/usr/local/bin/nvim" ]; then
+            nvim_cmd="/usr/local/bin/nvim"
+        elif [ -f "/usr/bin/nvim" ] && [ -x "/usr/bin/nvim" ]; then
+            nvim_cmd="/usr/bin/nvim"
+        elif command_exists nvim; then
+            nvim_cmd="nvim"
+        fi
+    fi
+    
+    if [ -z "$nvim_cmd" ]; then
+        print_error "Neovim not found after installation!"
+        print_error "Please check the installation logs above"
+        exit 1
     fi
     
     if ! check_neovim_version "$nvim_cmd"; then
         local installed_version
         installed_version=$(get_neovim_version "$nvim_cmd")
         print_error "Neovim version check failed!"
+        print_error "Neovim location: $nvim_cmd"
         print_error "Installed version: $installed_version"
         print_error "Required version: >= 0.11.2"
         print_error "LazyVim requires Neovim >= 0.11.2"
@@ -498,6 +603,7 @@ main() {
     local installed_version
     installed_version=$(get_neovim_version "$nvim_cmd")
     print_success "Neovim version verified: $installed_version (>= 0.11.2)"
+    print_status "Neovim location: $nvim_cmd"
     
     install_lazyvim
     copy_keymaps
