@@ -133,14 +133,41 @@ install_packages() {
 install_lazyvim() {
     print_status "Installing LazyVim..."
     
-    # Check if LazyVim is already installed
-    if [ -d "$HOME/.config/nvim" ] && [ -f "$HOME/.config/nvim/init.lua" ]; then
-        print_warning "LazyVim configuration already exists at ~/.config/nvim"
-        print_warning "The installation script will handle this. Continuing..."
+    local nvim_config="$HOME/.config/nvim"
+    
+    # Backup existing nvim config if it exists
+    if [ -d "$nvim_config" ]; then
+        if [ -f "$nvim_config/init.lua" ] || [ -f "$nvim_config/init.vim" ]; then
+            print_warning "Existing Neovim configuration found at ~/.config/nvim"
+            local backup_dir="${nvim_config}.bak.$(date +%Y%m%d_%H%M%S)"
+            print_status "Backing up existing configuration to ${backup_dir}"
+            mv "$nvim_config" "$backup_dir" || {
+                print_error "Failed to backup existing configuration"
+                exit 1
+            }
+            print_success "Backup created: ${backup_dir}"
+        else
+            # Directory exists but no config files, remove it
+            print_status "Removing empty nvim directory"
+            rm -rf "$nvim_config"
+        fi
     fi
     
-    # Install LazyVim using the official bootstrap script
-    bash <(curl -s https://raw.githubusercontent.com/LazyVim/LazyVim/starter/scripts/install.sh)
+    # Clone LazyVim starter repository
+    print_status "Cloning LazyVim starter repository..."
+    if git clone --depth=1 https://github.com/LazyVim/starter.git "$nvim_config"; then
+        print_success "LazyVim starter repository cloned successfully"
+    else
+        print_error "Failed to clone LazyVim starter repository"
+        print_error "Please check your internet connection and try again"
+        exit 1
+    fi
+    
+    # Remove .git directory to prevent conflicts
+    if [ -d "$nvim_config/.git" ]; then
+        print_status "Removing .git directory to prevent version control conflicts"
+        rm -rf "$nvim_config/.git"
+    fi
     
     print_success "LazyVim installed successfully"
 }

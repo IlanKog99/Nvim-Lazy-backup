@@ -113,7 +113,16 @@ sudo pacman -S neovim
 
 2. Install LazyVim:
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/LazyVim/LazyVim/starter/scripts/install.sh)
+# Backup existing config if needed (with timestamp to prevent overwriting)
+if [ -d ~/.config/nvim ] && ([ -f ~/.config/nvim/init.lua ] || [ -f ~/.config/nvim/init.vim ]); then
+  mv ~/.config/nvim ~/.config/nvim.bak.$(date +%Y%m%d_%H%M%S)
+fi
+
+# Clone LazyVim starter repository
+git clone --depth=1 https://github.com/LazyVim/starter.git ~/.config/nvim
+
+# Remove .git directory to prevent conflicts
+rm -rf ~/.config/nvim/.git
 ```
 
 3. Copy the custom keymaps:
