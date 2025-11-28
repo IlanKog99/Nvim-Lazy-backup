@@ -176,7 +176,8 @@ install_lazyvim() {
 create_directories() {
     print_status "Creating necessary directories..."
     
-    mkdir -p "$HOME/.config/nvim/lua/config"
+    # Only create directories that won't conflict with LazyVim installation
+    # Don't create ~/.config/nvim/lua/config here as it will be created by LazyVim
     mkdir -p "$HOME/.cache"
     mkdir -p "$HOME/.local/share"
     
@@ -191,6 +192,8 @@ copy_keymaps() {
     
     # Check if keymaps.lua exists relative to script location
     if [ -f "$KEYMAPS_FILE" ]; then
+        # Ensure the target directory exists (LazyVim should have created it, but be safe)
+        mkdir -p "$HOME/.config/nvim/lua/config"
         cp "$KEYMAPS_FILE" "$HOME/.config/nvim/lua/config/keymaps.lua"
         print_success "keymaps.lua copied from script directory"
     else

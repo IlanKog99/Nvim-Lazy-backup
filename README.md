@@ -114,8 +114,14 @@ sudo pacman -S neovim
 2. Install LazyVim:
 ```bash
 # Backup existing config if needed (with timestamp to prevent overwriting)
-if [ -d ~/.config/nvim ] && ([ -f ~/.config/nvim/init.lua ] || [ -f ~/.config/nvim/init.vim ]); then
-  mv ~/.config/nvim ~/.config/nvim.bak.$(date +%Y%m%d_%H%M%S)
+if [ -d ~/.config/nvim ]; then
+  if [ -f ~/.config/nvim/init.lua ] || [ -f ~/.config/nvim/init.vim ]; then
+    # Directory exists with config files, backup it
+    mv ~/.config/nvim ~/.config/nvim.bak.$(date +%Y%m%d_%H%M%S)
+  else
+    # Directory exists but no config files, remove it
+    rm -rf ~/.config/nvim
+  fi
 fi
 
 # Clone LazyVim starter repository
