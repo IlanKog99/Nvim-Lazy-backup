@@ -5,18 +5,17 @@
 #
 # PREREQUISITES (must be installed before running this script):
 #   - git (for cloning repositories and plugin management)
-#   - curl (for downloading LazyVim bootstrap script)
-#   - sudo access (for installing system packages)
+#   - curl (for downloading Neovim binary from GitHub releases)
+#   - tar (for extracting the Neovim binary tarball)
+#   - sudo access (for installing to system directories when running as root)
 #
-# IMPORTANT FOR ARCH LINUX USERS:
-#   - This script does NOT perform a full system upgrade (pacman -Syu) to avoid
-#     potential system bricking if interrupted or if disk space is insufficient.
-#   - You should update your Arch system manually BEFORE running this script:
-#     sudo pacman -Syu
-#   - The script will check for sufficient disk space (2GB minimum) before
-#     installing packages on Arch Linux.
+# INSTALLATION METHOD:
+#   This script downloads and installs the latest stable Neovim directly from
+#   GitHub releases (binary tarball). This method is more reliable than using
+#   package managers (which often have outdated versions) or AppImages (which
+#   require FUSE).
 #
-# All other dependencies (neovim) will be automatically installed by this script.
+# All other dependencies (neovim >= 0.11.2) will be automatically installed by this script.
 
 set -e  # Exit on any error
 
@@ -201,24 +200,24 @@ get_neovim_version() {
     fi
 }
 
-# Function to install Neovim AppImage
-install_neovim_appimage() {
-    print_status "Installing Neovim AppImage (latest stable release)..."
+# Function to install Neovim from GitHub releases binary tarball
+install_neovim_binary() {
+    print_status "Installing Neovim from GitHub releases (binary tarball)..."
     
     # Determine install location
     local install_dir
     local nvim_path
     
     if [ "$EUID" -eq 0 ]; then
-        install_dir="/usr/local/bin"
-        nvim_path="$install_dir/nvim"
+        install_dir="/usr/local"
+        nvim_path="/usr/local/bin/nvim"
     else
-        install_dir="$HOME/.local/bin"
-        nvim_path="$install_dir/nvim"
-        mkdir -p "$install_dir"
+        install_dir="$HOME/.local"
+        nvim_path="$HOME/.local/bin/nvim"
+        mkdir -p "$HOME/.local/bin"
     fi
     
-    # Ensure install directory is in PATH
+    # Ensure install directory is in PATH for non-root users
     if [ "$EUID" -ne 0 ]; then
         if ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
             print_warning "~/.local/bin is not in PATH. Adding to ~/.bashrc and ~/.zshrc..."
@@ -231,218 +230,133 @@ install_neovim_appimage() {
     # Create temporary directory for download
     local temp_dir
     temp_dir=$(mktemp -d)
-    trap "rm -rf $temp_dir" EXIT
     
-    # Download latest stable AppImage
-    print_status "Downloading latest Neovim AppImage from GitHub..."
-    local download_url="https://github.com/neovim/neovim/releases/latest/download/nvim.appimage"
-    local appimage_path="$temp_dir/nvim.appimage"
+    # Download latest stable binary tarball
+    print_status "Downloading latest Neovim binary from GitHub..."
+    local download_url="https://github.com/neovim/neovim/releases/latest/download/nvim-linux64.tar.gz"
+    local tarball_path="$temp_dir/nvim-linux64.tar.gz"
     
-    if ! curl -L -o "$appimage_path" "$download_url" 2>/dev/null; then
-        print_error "Failed to download Neovim AppImage"
+    if ! curl -L -o "$tarball_path" "$download_url" 2>/dev/null; then
+        print_error "Failed to download Neovim binary tarball"
         print_error "Please check your internet connection and try again"
+        rm -rf "$temp_dir"
         return 1
     fi
     
-    # Make AppImage executable
-    chmod +x "$appimage_path"
+    # Verify the download is a valid tarball (not an HTML error page)
+    if ! file "$tarball_path" 2>/dev/null | grep -q "gzip"; then
+        print_error "Downloaded file is not a valid gzip archive"
+        print_error "The download may have failed or been redirected"
+        rm -rf "$temp_dir"
+        return 1
+    fi
     
-    # Move to install location
+    # Extract the tarball
+    print_status "Extracting Neovim binary..."
+    if ! tar -xzf "$tarball_path" -C "$temp_dir" 2>/dev/null; then
+        print_error "Failed to extract Neovim tarball"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    # Find the extracted directory (should be nvim-linux64)
+    local extracted_dir="$temp_dir/nvim-linux64"
+    if [ ! -d "$extracted_dir" ]; then
+        print_error "Extracted directory not found"
+        rm -rf "$temp_dir"
+        return 1
+    fi
+    
+    # Remove existing Neovim installation if present
     if [ -f "$nvim_path" ]; then
         print_status "Removing existing Neovim installation at $nvim_path"
         rm -f "$nvim_path"
     fi
     
-    mv "$appimage_path" "$nvim_path"
+    # Remove any existing nvim-linux64 directory in install location
+    if [ -d "$install_dir/nvim-linux64" ]; then
+        print_status "Removing existing nvim-linux64 directory..."
+        rm -rf "$install_dir/nvim-linux64"
+    fi
+    
+    # Move the extracted directory to install location
+    print_status "Installing Neovim to $install_dir..."
+    mv "$extracted_dir" "$install_dir/"
+    
+    # Create symlink to the binary
+    if [ "$EUID" -eq 0 ]; then
+        ln -sf "$install_dir/nvim-linux64/bin/nvim" "$nvim_path"
+    else
+        ln -sf "$install_dir/nvim-linux64/bin/nvim" "$nvim_path"
+    fi
+    
+    # Clean up temp directory
+    rm -rf "$temp_dir"
     
     # Verify installation
-    if [ -f "$nvim_path" ] && [ -x "$nvim_path" ]; then
-        print_success "Neovim AppImage installed successfully at $nvim_path"
-        
-        # Test if AppImage actually runs (some systems need FUSE)
-        print_status "Testing Neovim AppImage..."
-        if ! "$nvim_path" --version >/dev/null 2>&1; then
-            print_warning "AppImage may require FUSE. Checking for fuse..."
-            if ! command_exists fusermount && ! command_exists fusermount3; then
-                print_warning "FUSE not found. AppImage may not work. Trying to extract AppImage..."
-                # Try to extract AppImage as fallback
-                local extract_dir="$install_dir/nvim-extracted"
-                mkdir -p "$extract_dir"
-                cd "$extract_dir"
-                "$nvim_path" --appimage-extract >/dev/null 2>&1
-                if [ -f "$extract_dir/squashfs-root/AppRun" ]; then
-                    mv "$nvim_path" "${nvim_path}.backup"
-                    ln -sf "$extract_dir/squashfs-root/AppRun" "$nvim_path"
-                    print_status "Extracted AppImage to $extract_dir"
-                else
-                    print_error "Failed to extract AppImage. FUSE may be required."
-                    return 1
-                fi
-                cd - >/dev/null
+    if [ -L "$nvim_path" ] || [ -f "$nvim_path" ]; then
+        if [ -x "$install_dir/nvim-linux64/bin/nvim" ]; then
+            print_success "Neovim binary installed successfully at $nvim_path"
+            
+            # Test version
+            local installed_version
+            installed_version=$(get_neovim_version "$nvim_path")
+            if [ "$installed_version" = "unknown" ] || [ "$installed_version" = "not installed" ]; then
+                print_error "Failed to get Neovim version"
+                print_error "The binary may not be working correctly"
+                return 1
             fi
-        fi
-        
-        # Test version
-        local installed_version
-        installed_version=$(get_neovim_version "$nvim_path")
-        if [ "$installed_version" = "unknown" ]; then
-            print_error "Failed to get Neovim version from AppImage"
-            print_error "The AppImage may not be working correctly"
+            print_status "Installed Neovim version: $installed_version"
+            
+            # Verify version meets requirements
+            if check_neovim_version "$nvim_path"; then
+                print_success "Neovim version $installed_version meets requirements (>= 0.11.2)"
+                return 0
+            else
+                print_error "Installed version $installed_version does not meet requirements (>= 0.11.2)"
+                return 1
+            fi
+        else
+            print_error "Neovim binary is not executable"
             return 1
         fi
-        print_status "Installed Neovim version: $installed_version"
-        
-        return 0
     else
-        print_error "Failed to install Neovim AppImage"
+        print_error "Failed to install Neovim binary"
         return 1
     fi
 }
 
-# Function to install packages based on distro
+# Function to install Neovim
 install_packages() {
-    print_status "Detecting package manager and installing dependencies..."
+    print_status "Installing Neovim from GitHub releases..."
     print_status "LazyVim requires Neovim >= 0.11.2"
     
-    if command_exists apt; then
-        # Debian/Ubuntu - Use Neovim PPA for latest stable version
-        print_status "Using apt package manager (Debian/Ubuntu)"
-        print_status "Setting up Neovim PPA for latest stable version..."
-        
-        # Remove old neovim first to avoid conflicts
-        if command_exists nvim || dpkg -l 2>/dev/null | grep -q "^ii.*neovim"; then
-            print_status "Removing old Neovim installation to avoid conflicts..."
-            sudo apt remove -y neovim 2>/dev/null || true
-            sudo apt purge -y neovim 2>/dev/null || true
-        fi
-        
-        # Check if add-apt-repository exists
-        if ! command_exists add-apt-repository; then
-            print_status "Installing software-properties-common for add-apt-repository..."
-            sudo apt update
-            sudo apt install -y software-properties-common
-        fi
-        
-        # Add Neovim PPA
-        if ! sudo add-apt-repository -y ppa:neovim-ppa/stable 2>/dev/null; then
-            print_warning "Failed to add Neovim PPA using add-apt-repository"
-            if command_exists lsb_release; then
-                print_warning "Trying alternative PPA setup method..."
-                # Alternative: try to add PPA manually
-                echo "deb https://ppa.launchpadcontent.net/neovim-ppa/stable/ubuntu $(lsb_release -cs) main" | sudo tee /etc/apt/sources.list.d/neovim-ppa-stable.list >/dev/null
-                sudo apt-key adv --keyserver keyserver.ubuntu.com --recv-keys 9DBB0BE9366964F134855E2255F96FCF8231B6DD 2>/dev/null || true
-            else
-                print_warning "lsb_release not available, using AppImage instead"
-                install_neovim_appimage
-                return 0
-            fi
-        fi
-        
-        sudo apt update
-        
-        # Try to install from PPA (PPA should have higher priority)
-        if sudo apt install -y neovim 2>/dev/null; then
-            # Verify version - check multiple possible locations
-            local nvim_to_check=""
-            if [ -f "/usr/bin/nvim" ] && [ -x "/usr/bin/nvim" ]; then
-                nvim_to_check="/usr/bin/nvim"
-            elif command_exists nvim; then
-                nvim_to_check="nvim"
-            fi
-            
-            if [ -n "$nvim_to_check" ] && check_neovim_version "$nvim_to_check"; then
-                local installed_version
-                installed_version=$(get_neovim_version "$nvim_to_check")
-                print_success "Neovim installed successfully from PPA (version $installed_version)"
-                return 0
-            fi
-        fi
-        
-        # If PPA installation failed or version is insufficient, use AppImage
-        print_warning "PPA installation failed or version is insufficient, falling back to AppImage..."
-        install_neovim_appimage
-        
-    elif command_exists yum; then
-        # RHEL/CentOS/Fedora
-        print_status "Using yum package manager (RHEL/CentOS/Fedora)"
-        sudo yum update -y
-        sudo yum install -y neovim
-        
-        # Check if version is sufficient
-        if check_neovim_version nvim; then
-            local installed_version
-            installed_version=$(get_neovim_version nvim)
-            print_success "Neovim installed successfully (version $installed_version)"
-        else
-            print_warning "Repository version is insufficient, installing AppImage..."
-            install_neovim_appimage
-        fi
-        
-    elif command_exists dnf; then
-        # Fedora
-        print_status "Using dnf package manager (Fedora)"
-        sudo dnf update -y
-        sudo dnf install -y neovim
-        
-        # Check if version is sufficient
-        if check_neovim_version nvim; then
-            local installed_version
-            installed_version=$(get_neovim_version nvim)
-            print_success "Neovim installed successfully (version $installed_version)"
-        else
-            print_warning "Repository version is insufficient, installing AppImage..."
-            install_neovim_appimage
-        fi
-        
-    elif command_exists pacman; then
-        # Arch Linux
-        # NOTE: We use -S (not -Syu) to avoid full system upgrade which can brick
-        # the system if interrupted or if disk space is insufficient. Users should
-        # update their system manually with 'sudo pacman -Syu' before running this script.
-        print_status "Using pacman package manager (Arch Linux)"
-        print_warning "For Arch Linux, ensure your system is up to date before running this script"
-        print_warning "Run 'sudo pacman -Syu' manually if needed"
-        
-        # Check disk space before installing (critical for Arch)
-        if ! check_disk_space 2; then
-            print_error "Disk space check failed. Aborting package installation."
-            exit 1
-        fi
-        
-        sudo pacman -S --needed --noconfirm neovim
-        
-        # Check if version is sufficient (Arch usually has latest)
-        if check_neovim_version nvim; then
-            local installed_version
-            installed_version=$(get_neovim_version nvim)
-            print_success "Neovim installed successfully (version $installed_version)"
-        else
-            print_warning "Repository version is insufficient, installing AppImage..."
-            install_neovim_appimage
-        fi
-        
-    elif command_exists zypper; then
-        # openSUSE
-        print_status "Using zypper package manager (openSUSE)"
-        print_status "Checking repository version first..."
-        
-        sudo zypper refresh
-        sudo zypper install -y neovim
-        
-        # Check if version is sufficient
-        if check_neovim_version nvim; then
-            local installed_version
-            installed_version=$(get_neovim_version nvim)
-            print_success "Neovim installed successfully (version $installed_version)"
-        else
-            print_warning "Repository version is insufficient, installing AppImage..."
-            install_neovim_appimage
-        fi
-        
-    else
-        # Unsupported package manager - use AppImage
-        print_warning "Unsupported package manager detected. Installing Neovim AppImage..."
-        install_neovim_appimage
+    # Remove any existing Neovim installations from package managers
+    print_status "Checking for existing Neovim installations..."
+    
+    if command_exists apt && (command_exists nvim || dpkg -l 2>/dev/null | grep -q "^ii.*neovim"); then
+        print_status "Removing existing Neovim installation from apt..."
+        sudo apt remove -y neovim 2>/dev/null || true
+        sudo apt purge -y neovim 2>/dev/null || true
+    elif command_exists yum && rpm -q neovim >/dev/null 2>&1; then
+        print_status "Removing existing Neovim installation from yum..."
+        sudo yum remove -y neovim 2>/dev/null || true
+    elif command_exists dnf && rpm -q neovim >/dev/null 2>&1; then
+        print_status "Removing existing Neovim installation from dnf..."
+        sudo dnf remove -y neovim 2>/dev/null || true
+    elif command_exists pacman && pacman -Q neovim >/dev/null 2>&1; then
+        print_status "Removing existing Neovim installation from pacman..."
+        sudo pacman -R --noconfirm neovim 2>/dev/null || true
+    elif command_exists zypper && zypper se -i neovim >/dev/null 2>&1; then
+        print_status "Removing existing Neovim installation from zypper..."
+        sudo zypper remove -y neovim 2>/dev/null || true
+    fi
+    
+    # Install Neovim from GitHub releases binary tarball
+    if ! install_neovim_binary; then
+        print_error "Failed to install Neovim from GitHub releases"
+        print_error "Please try installing Neovim manually from: https://github.com/neovim/neovim/releases"
+        exit 1
     fi
 }
 
@@ -550,6 +464,11 @@ main() {
         exit 1
     fi
     
+    if ! command_exists tar; then
+        print_error "tar is required but not installed. Please install tar first."
+        exit 1
+    fi
+    
     # Start installation
     create_directories
     install_packages
@@ -558,25 +477,21 @@ main() {
     print_status "Verifying Neovim installation..."
     local nvim_cmd=""
     
-    # Find Neovim installation - check multiple possible locations
+    # Find Neovim installation - check the symlink locations first
     if [ "$EUID" -eq 0 ]; then
-        # Root: check /usr/local/bin first (AppImage location), then /usr/bin
-        if [ -f "/usr/local/bin/nvim" ] && [ -x "/usr/local/bin/nvim" ]; then
+        # Root: check /usr/local/bin first (symlink location)
+        if [ -L "/usr/local/bin/nvim" ] || [ -f "/usr/local/bin/nvim" ]; then
             nvim_cmd="/usr/local/bin/nvim"
-        elif [ -f "/usr/bin/nvim" ] && [ -x "/usr/bin/nvim" ]; then
-            nvim_cmd="/usr/bin/nvim"
         elif command_exists nvim; then
             nvim_cmd="nvim"
         fi
     else
-        # Non-root: check ~/.local/bin first (AppImage location), then system locations
-        if [ -f "$HOME/.local/bin/nvim" ] && [ -x "$HOME/.local/bin/nvim" ]; then
+        # Non-root: check ~/.local/bin first (symlink location)
+        if [ -L "$HOME/.local/bin/nvim" ] || [ -f "$HOME/.local/bin/nvim" ]; then
             nvim_cmd="$HOME/.local/bin/nvim"
             export PATH="$HOME/.local/bin:$PATH"
-        elif [ -f "/usr/local/bin/nvim" ] && [ -x "/usr/local/bin/nvim" ]; then
+        elif [ -L "/usr/local/bin/nvim" ] || [ -f "/usr/local/bin/nvim" ]; then
             nvim_cmd="/usr/local/bin/nvim"
-        elif [ -f "/usr/bin/nvim" ] && [ -x "/usr/bin/nvim" ]; then
-            nvim_cmd="/usr/bin/nvim"
         elif command_exists nvim; then
             nvim_cmd="nvim"
         fi
