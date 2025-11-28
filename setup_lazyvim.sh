@@ -200,9 +200,33 @@ get_neovim_version() {
     fi
 }
 
+# Function to detect system architecture
+detect_architecture() {
+    local arch
+    arch=$(uname -m 2>/dev/null || echo "unknown")
+    
+    case "$arch" in
+        x86_64|amd64)
+            echo "x86_64"
+            ;;
+        aarch64|arm64)
+            echo "arm64"
+            ;;
+        *)
+            print_warning "Unknown architecture: $arch, defaulting to x86_64"
+            echo "x86_64"
+            ;;
+    esac
+}
+
 # Function to install Neovim from GitHub releases binary tarball
 install_neovim_binary() {
     print_status "Installing Neovim from GitHub releases (binary tarball)..."
+    
+    # Detect system architecture
+    local arch
+    arch=$(detect_architecture)
+    print_status "Detected architecture: $arch"
     
     # Determine install location
     local install_dir
@@ -239,17 +263,21 @@ install_neovim_binary() {
     local latest_tag
     latest_tag=$(curl -s https://api.github.com/repos/neovim/neovim/releases/latest 2>/dev/null | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/' || echo "")
     
+    # Determine correct filename based on architecture
+    local tarball_filename="nvim-linux-${arch}.tar.gz"
+    local extracted_dirname="nvim-linux-${arch}"
+    
     if [ -z "$latest_tag" ]; then
         print_warning "Failed to get latest release tag from GitHub API, trying direct download..."
         # Fallback: try the /latest/download/ pattern
-        local download_url="https://github.com/neovim/neovim/releases/latest/download/nvim-linux64.tar.gz"
+        local download_url="https://github.com/neovim/neovim/releases/latest/download/${tarball_filename}"
     else
         print_status "Latest release: $latest_tag"
-        # Construct download URL with version tag
-        local download_url="https://github.com/neovim/neovim/releases/download/${latest_tag}/nvim-linux64.tar.gz"
+        # Construct download URL with version tag and correct architecture
+        local download_url="https://github.com/neovim/neovim/releases/download/${latest_tag}/${tarball_filename}"
     fi
     
-    local tarball_path="$temp_dir/nvim-linux64.tar.gz"
+    local tarball_path="$temp_dir/${tarball_filename}"
     
     # Download with progress and error checking
     print_status "Downloading Neovim binary from: $download_url"
@@ -315,11 +343,13 @@ install_neovim_binary() {
         return 1
     fi
     
-    # Find the extracted directory (should be nvim-linux64)
-    local extracted_dir="$temp_dir/nvim-linux64"
+    # Find the extracted directory (should be nvim-linux-{arch})
+    local extracted_dir="$temp_dir/${extracted_dirname}"
     if [ ! -d "$extracted_dir" ]; then
-        print_error "Extracted directory not found"
+        print_error "Extracted directory not found: $extracted_dir"
+        print_error "Expected directory name: $extracted_dirname"
         rm -rf "$temp_dir"
+        trap - EXIT
         return 1
     fi
     
@@ -329,10 +359,10 @@ install_neovim_binary() {
         rm -f "$nvim_path"
     fi
     
-    # Remove any existing nvim-linux64 directory in install location
-    if [ -d "$install_dir/nvim-linux64" ]; then
-        print_status "Removing existing nvim-linux64 directory..."
-        rm -rf "$install_dir/nvim-linux64"
+    # Remove any existing nvim-linux-{arch} directory in install location
+    if [ -d "$install_dir/${extracted_dirname}" ]; then
+        print_status "Removing existing ${extracted_dirname} directory..."
+        rm -rf "$install_dir/${extracted_dirname}"
     fi
     
     # Move the extracted directory to install location
@@ -348,8 +378,8 @@ install_neovim_binary() {
     fi
     
     # Verify the move was successful
-    if [ ! -d "$install_dir/nvim-linux64" ]; then
-        print_error "Neovim directory not found at $install_dir/nvim-linux64 after move"
+    if [ ! -d "$install_dir/${extracted_dirname}" ]; then
+        print_error "Neovim directory not found at $install_dir/${extracted_dirname} after move"
         # Clean up temp directory before returning
         rm -rf "$temp_dir"
         # Remove trap since we're cleaning up manually
@@ -359,19 +389,19 @@ install_neovim_binary() {
     
     # Create symlink to the binary
     if [ "$EUID" -eq 0 ]; then
-        if ! ln -sf "$install_dir/nvim-linux64/bin/nvim" "$nvim_path" 2>/dev/null; then
+        if ! ln -sf "$install_dir/${extracted_dirname}/bin/nvim" "$nvim_path" 2>/dev/null; then
             print_error "Failed to create symlink at $nvim_path"
             # Clean up installed directory and temp directory
-            rm -rf "$install_dir/nvim-linux64"
+            rm -rf "$install_dir/${extracted_dirname}"
             rm -rf "$temp_dir"
             trap - EXIT
             return 1
         fi
     else
-        if ! ln -sf "$install_dir/nvim-linux64/bin/nvim" "$nvim_path" 2>/dev/null; then
+        if ! ln -sf "$install_dir/${extracted_dirname}/bin/nvim" "$nvim_path" 2>/dev/null; then
             print_error "Failed to create symlink at $nvim_path"
             # Clean up installed directory and temp directory
-            rm -rf "$install_dir/nvim-linux64"
+            rm -rf "$install_dir/${extracted_dirname}"
             rm -rf "$temp_dir"
             trap - EXIT
             return 1
@@ -385,7 +415,7 @@ install_neovim_binary() {
     
     # Verify installation
     if [ -L "$nvim_path" ] || [ -f "$nvim_path" ]; then
-        if [ -x "$install_dir/nvim-linux64/bin/nvim" ]; then
+        if [ -x "$install_dir/${extracted_dirname}/bin/nvim" ]; then
             print_success "Neovim binary installed successfully at $nvim_path"
             
             # Test version
@@ -409,20 +439,20 @@ install_neovim_binary() {
                 print_error "Installed version $installed_version does not meet requirements (>= 0.11.2)"
                 # Clean up installation since version is insufficient
                 rm -f "$nvim_path"
-                rm -rf "$install_dir/nvim-linux64"
+                rm -rf "$install_dir/${extracted_dirname}"
                 return 1
             fi
         else
             print_error "Neovim binary is not executable"
             # Clean up installation since binary is not executable
             rm -f "$nvim_path"
-            rm -rf "$install_dir/nvim-linux64"
+            rm -rf "$install_dir/${extracted_dirname}"
             return 1
         fi
     else
         print_error "Failed to install Neovim binary (symlink not created)"
         # Clean up installation since symlink creation failed
-        rm -rf "$install_dir/nvim-linux64"
+        rm -rf "$install_dir/${extracted_dirname}"
         return 1
     fi
 }
